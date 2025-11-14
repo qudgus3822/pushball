@@ -2,18 +2,21 @@
   "name": "my-first",
   "version": "1.0.0",
   "main": "index.js",
-  "type" : "module",
+  "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev" : "vite",
-    "build" : "vite build",
-    "preview" : "vite preview"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "build:copy": "vite build && npm run copy",
+    "copy": "cp -r dist/* /home/bhkim/Source/my-app/my-app-svelte/static/web-games/first-game/"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@supabase/supabase-js": "^2.81.1",
     "phaser": "^3.90.0"
   },
   "devDependencies": {

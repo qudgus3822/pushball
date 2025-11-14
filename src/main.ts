@@ -1,4 +1,7 @@
 import Phaser from "phaser";
+import { MultiplayerScene } from "./multiplayerExample";
+import { RoomListScene } from "./RoomListScene";
+import { PvPGameScene } from "./PvPGameScene";
 
 class GameScene extends Phaser.Scene {
   private balls!: Phaser.Physics.Arcade.Group;
@@ -207,13 +210,24 @@ const config: Phaser.Types.Core.GameConfig = {
   width: 800,
   height: 600,
   backgroundColor: "#2d2d2d",
-  scene: [GameScene],
+  scene: [RoomListScene, PvPGameScene, GameScene], // 2025-11-14, 김병현 수정 - 방 목록이 첫 화면
   physics: {
     default: "arcade",
     arcade: {
-      gravity: { x: 0, y: 300 },
+      gravity: { x: 0, y: 0 }, // 2025-11-14, 김병현 수정 - PvP에서는 중력 없음
       debug: false,
     },
+  },
+  // 브라우저 크기에 맞게 자동 리사이즈 - 2025-11-14, 김병현 수정
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+    width: 800,
+    height: 600,
+  },
+  fps: {
+    target: 30, // 목표 FPS (기본값: 60)
+    // min: 30, // 최소 FPS
   },
 };
 

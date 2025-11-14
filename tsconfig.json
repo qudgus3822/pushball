@@ -7,9 +7,10 @@
 
     // Environment Settings
     // See also https://aka.ms/tsconfig/module
-    "module": "nodenext",
-    "target": "esnext",
-    "types": [],
+    "module": "ESNext", // 2025-11-14, 김병현 수정 - Vite용 설정
+    "moduleResolution": "bundler", // 2025-11-14, 김병현 수정 - 번들러용 모듈 해석
+    "target": "ESNext",
+    "types": ["vite/client"], // 2025-11-14, 김병현 수정 - Vite 타입 인식
     // For nodejs:
     // "lib": ["esnext"],
     // "types": ["node"],
