@@ -44,9 +44,32 @@ export class PvPGameScene extends Phaser.Scene {
   }
 
   // [변경: 2026-11-10 13:18, 김병현 수정] 방 id 는 연결 모듈이 기억하므로 받지 않는다. 플레이어 id 는 명단을 받을 때 채운다.
+  // [변경: 2026-11-10 13:45, 김병현 수정] 판마다 상태를 처음 값으로 되돌린다.
+  //   Phaser 는 Scene 을 다시 시작할 때 같은 인스턴스를 쓰므로 필드 초기값이 다시 적용되지 않는다.
+  //   초기화하지 않으면 두 번째 판에서 gameOver 가 true 로 남아 득점과 업데이트가 멈추고,
+  //   이미 파괴된 startButton 이 남아 시작 버튼이 다시 생기지 않는다.
+  //   게임 오브젝트(공, 패들, 구멍, 텍스트)와 physics world 는 create 에서 새로 만들어지므로 여기서 다루지 않는다.
   init() {
     this.playerId = "";
     this.roomPlayerIds = [];
+    this.opponentId = undefined;
+    this.priorityUserId = undefined;
+
+    this.lastPointerX = 0;
+    this.lastPointerY = 0;
+    this.pointerVelocityX = 0;
+    this.pointerVelocityY = 0;
+    this.isMouseDown = false;
+    this.mouseDownTime = 0;
+
+    this.gameOver = false;
+    this.gameStarted = false;
+    this.myScore = 0;
+    this.opponentScore = 0;
+
+    this.waitingText = undefined;
+    this.startText = undefined;
+    this.startButton = undefined;
   }
 
   create() {

@@ -19,6 +19,16 @@ export class RoomListScene extends Phaser.Scene {
     super("RoomListScene");
   }
 
+  // [변경: 2026-11-10 13:45, 김병현 수정] 로비에 들어올 때마다 상태를 처음 값으로 되돌린다.
+  //   Phaser 는 Scene 을 다시 시작할 때 같은 인스턴스를 쓴다. 초기화하지 않으면 게임을 마치고 돌아왔을 때
+  //   roomButtons 에 이전 판의 파괴된 텍스트가 남아, 로비를 갱신할 때 그 텍스트까지 다시 그리려 한다.
+  init() {
+    this.roomButtons = [];
+    this.roomCounts = undefined;
+    this.lobbyConnected = false;
+    this.isEntering = false;
+  }
+
   create() {
     // 배경색
     this.cameras.main.setBackgroundColor("#1a1a2e");
@@ -61,7 +71,6 @@ export class RoomListScene extends Phaser.Scene {
   // 로비 구독 - 2025-11-14, 김병현 수정
   // [변경: 2026-11-10 13:18, 김병현 수정] Supabase 로비 채널 대신 서버의 로비 구독을 쓴다.
   private connectToLobby() {
-    this.lobbyConnected = false;
     const stopWatchingLobby = pushballConnection.watchLobby((lobby) =>
       this.updateRoomList(lobby)
     );
