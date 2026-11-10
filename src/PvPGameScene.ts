@@ -1,12 +1,14 @@
 import Phaser from "phaser";
-import { supabase } from "./supabase";
-import type { RealtimeChannel } from "@supabase/supabase-js";
+// [변경: 2026-11-10 13:18, 김병현 수정] Supabase Realtime 대신 실시간 서버 연결 모듈(pushballConnection)을 쓴다.
+//   방 입장은 RoomListScene 이 끝낸 상태로 넘어온다. 이 Scene 은 명단과 게임 메시지만 구독한다.
+import { pushballConnection } from "./network/pushballConnection";
+import type { GameMessages, RoomPlayers } from "./types/realtime";
 
 // 2인 대전 게임 Scene - 2025-11-14, 김병현 수정
 export class PvPGameScene extends Phaser.Scene {
-  private channel!: RealtimeChannel;
-  private roomId!: string;
-  private playerId!: string;
+  // [변경: 2026-11-10 13:18, 김병현 수정] 플레이어 id 는 서버가 정한다(방 명단의 myId). 직접 만들지 않는다.
+  private playerId: string = "";
+  private roomPlayerIds: readonly string[] = []; // 직전 방 명단. 상대가 나갔는지 판단할 때 비교한다.
   private myPosition: "bottom" | "top" = "bottom"; // 내 진영은 항상 아래
   private opponentId?: string | undefined;
   private priorityUserId?: string | undefined;
@@ -41,9 +43,10 @@ export class PvPGameScene extends Phaser.Scene {
     super("PvPGameScene");
   }
 
-  init(data: { roomId: string }) {
-    this.roomId = data.roomId;
-    this.playerId = "player_" + Math.random().toString(36).substr(2, 9);
+  // [변경: 2026-11-10 13:18, 김병현 수정] 방 id 는 연결 모듈이 기억하므로 받지 않는다. 플레이어 id 는 명단을 받을 때 채운다.
+  init() {
+    this.playerId = "";
+    this.roomPlayerIds = [];
   }
 
   create() {
@@ -521,13 +524,8 @@ export class PvPGameScene extends Phaser.Scene {
     );
 
     // 게임 시작 브로드캐스트
-    this.channel.send({
-      type: "broadcast",
-      event: "game-start",
-      payload: {
-        playerId: this.playerId,
-      },
-    });
+    // [변경: 2026-11-10 13:18, 김병현 수정] 서버를 거쳐 상대에게만 보낸다.
+    pushballConnection.sendEvent("game-start", {});
   }
 
   // 득점 처리 - 2025-11-14, 김병현 수정
@@ -544,14 +542,11 @@ export class PvPGameScene extends Phaser.Scene {
     }
 
     // 득점 브로드캐스트
-    this.channel.send({
-      type: "broadcast",
-      event: "goal-scored",
-      payload: {
-        scorer: scorer,
-        myScore: this.myScore,
-        opponentScore: this.opponentScore,
-      },
+    // [변경: 2026-11-10 13:18, 김병현 수정] 서버를 거쳐 상대에게만 보낸다.
+    pushballConnection.sendEvent("goal-scored", {
+      scorer: scorer,
+      myScore: this.myScore,
+      opponentScore: this.opponentScore,
     });
 
     // 득점 효과
@@ -614,207 +609,196 @@ export class PvPGameScene extends Phaser.Scene {
   }
 
   // Realtime 연결 설정 - 2025-11-14, 김병현 수정
+  // [변경: 2026-11-10 13:18, 김병현 수정] Supabase 채널 대신 연결 모듈의 명단 구독과 게임 메시지 구독을 쓴다.
+  //   Phaser 는 씬의 shutdown() 메서드를 부르지 않으므로, shutdown 이벤트에서 구독을 풀고 방에서 나간다.
   private setupRealtimeConnection() {
-    this.channel = supabase.channel(this.roomId, {
-      config: {
-        broadcast: { self: false },
-        presence: { key: this.playerId },
-      },
-    });
-
-    // Presence로 상대 감지
-    this.channel
-      .on("presence", { event: "sync" }, () => {
-        const state = this.channel.presenceState();
-        const players = Object.keys(state);
-
-        if (players.length === 2) {
-          // 2명이면 게임 초기화 - 2025-11-14, 김병현 수정
-          if (this.waitingText) {
-            this.waitingText.destroy();
-            this.waitingText = undefined;
-          }
-
-          // 상대 ID 저장
-          const newOpponentId = players.find((id) => id !== this.playerId);
-
-          // 새로운 상대가 들어왔을 때 게임 초기화 - 2025-11-14, 김병현 수정
-          if (newOpponentId !== this.opponentId) {
-            this.opponentId = newOpponentId;
-
-            // 게임이 진행 중이었다면 초기화
-            if (this.gameStarted) {
-              this.resetGame();
-            }
-          }
-
-          // 시작 버튼 표시 - 2025-11-14, 김병현 수정
-          if (!this.startButton && !this.gameStarted) {
-            this.createStartButton();
-          }
-        } else if (players.length === 1) {
-          if (!this.waitingText && !this.gameStarted) {
-            const width = this.cameras.main.width;
-            const height = this.cameras.main.height;
-            this.waitingText = this.add
-              .text(
-                width / 2,
-                height / 3,
-                "혼자 플레이 중 | 상대를 기다리는 중...",
-                {
-                  fontSize: "24px",
-                  color: "#ffff00",
-                }
-              )
-              .setOrigin(0.5);
-          }
-
-          this.priorityUserId = players[0];
-        }
-      })
-      .on("presence", { event: "leave" }, () => {
-        if (!this.gameOver) {
-          const width = this.cameras.main.width;
-          const height = this.cameras.main.height;
-          this.add
-            .text(width / 2, height / 2, "상대가 나갔습니다!", {
-              fontSize: "48px",
-              color: "#ff0000",
-            })
-            .setOrigin(0.5);
-        }
-      });
-
-    // Broadcast로 공 위치 동기화 - 2025-11-14, 김병현 수정 (상대좌표 사용, 보간 적용)
-    this.channel.on(
-      "broadcast",
-      { event: "ball-position" },
-      ({ payload }: { payload: any }) => {
-        if (this.ball && payload.playerId !== this.playerId) {
-          // 화면 크기 가져오기
-          const width = this.cameras.main.width;
-          const height = this.cameras.main.height;
-
-          // 상대 좌표(0~1)를 절대 좌표로 변환
-          const absoluteX = payload.relativeX * width;
-          const absoluteY = payload.relativeY * height;
-
-          // 상대방의 공 위치 업데이트 (화면을 180도 회전하여 표시)
-          // 상대는 위쪽에 있으므로 좌표를 반전
-          const flippedY = height - absoluteY;
-          const flippedX = width - absoluteX;
-
-          // 현재 위치와 목표 위치의 차이 계산
-          const distanceX = flippedX - this.ball.x;
-          const distanceY = flippedY - this.ball.y;
-          const distance = Math.sqrt(
-            distanceX * distanceX + distanceY * distanceY
-          );
-
-          // 거리가 너무 크면 순간이동 (제어권 전환 시), 작으면 부드럽게 보간
-          if (distance > 100) {
-            // 제어권 전환 시: 즉시 이동
-            this.ball.setPosition(flippedX, flippedY);
-            this.ball.setVelocity(-payload.vx, -payload.vy);
-          } else {
-            // 일반적인 경우: 부드럽게 보간
-            const lerpFactor = 0.3; // 보간 강도 (0~1, 높을수록 빠르게 따라감)
-            const targetX = this.ball.x + distanceX * lerpFactor;
-            const targetY = this.ball.y + distanceY * lerpFactor;
-
-            this.ball.setPosition(targetX, targetY);
-            this.ball.setVelocity(-payload.vx, -payload.vy);
-          }
-        }
-      }
-    );
-
-    // 게임 시작 이벤트 수신 - 2025-11-14, 김병현 수정
-    this.channel.on(
-      "broadcast",
-      { event: "game-start" },
-      ({ payload }: { payload: any }) => {
-        if (payload.playerId !== this.playerId && !this.gameStarted) {
+    const unsubscribers = [
+      pushballConnection.onPlayersChanged((players) =>
+        this.handleRoomPlayersChanged(players)
+      ),
+      pushballConnection.onRelay("ball-position", (payload) =>
+        this.applyOpponentBallPosition(payload)
+      ),
+      pushballConnection.onRelay("game-start", () => {
+        if (!this.gameStarted) {
           this.startGame();
         }
-      }
-    );
-
-    // 패들 위치 동기화 - 2025-11-14, 김병현 수정 (상대좌표 사용)
-    this.channel.on(
-      "broadcast",
-      { event: "paddle-position" },
-      ({ payload }: { payload: any }) => {
-        if (this.opponentPaddle && payload.playerId !== this.playerId) {
-          // 화면 크기 가져오기
-          const width = this.cameras.main.width;
-          const height = this.cameras.main.height;
-
-          // 상대 좌표(0~1)를 절대 좌표로 변환
-          const absoluteX = payload.relativeX * width;
-          const absoluteY = payload.relativeY * height;
-
-          // 상대방의 패들 위치 업데이트 (화면을 180도 회전하여 표시)
-          const flippedY = height - absoluteY;
-          const flippedX = width - absoluteX;
-
-          this.opponentPaddle.setPosition(flippedX, flippedY);
-          this.opponentPaddle.setVisible(true); // 상대가 연결되면 보이게
-        }
-      }
-    );
-
-    // 득점 이벤트 수신 - 2025-11-14, 김병현 수정
-    this.channel.on(
-      "broadcast",
-      { event: "goal-scored" },
-      ({ payload }: { payload: any }) => {
-        // 상대방 화면에서는 scorer가 반대로 표시됨
-        if (payload.scorer === "me") {
-          this.opponentScore++;
-          this.opponentScoreText.setText(`상대 점수: ${this.opponentScore}`);
-        } else {
-          this.myScore++;
-          this.myScoreText.setText(`내 점수: ${this.myScore}`);
-        }
-
-        // 득점 효과
-        this.cameras.main.flash(300, 255, 255, 255);
-
-        // 승리 조건 확인
-        if (this.myScore >= 3) {
-          this.handleGameOver(true);
-        } else if (this.opponentScore >= 3) {
-          this.handleGameOver(false);
-        }
-      }
-    );
-
-    // 게임 오버 수신
-    this.channel.on(
-      "broadcast",
-      { event: "game-over" },
-      ({ payload }: { payload: any }) => {
+      }),
+      pushballConnection.onRelay("paddle-position", (payload) =>
+        this.applyOpponentPaddlePosition(payload)
+      ),
+      pushballConnection.onRelay("goal-scored", (payload) =>
+        this.applyOpponentGoal(payload)
+      ),
+      pushballConnection.onRelay("game-over", (payload) => {
         if (payload.loserId === this.playerId) {
           this.handleGameOver(false);
         } else {
           this.handleGameOver(true);
         }
-      }
-    );
+      }),
+    ];
 
-    // 채널 구독
-    this.channel.subscribe(async (status) => {
-      if (status === "SUBSCRIBED") {
-        await this.channel.track({
-          playerId: this.playerId,
-          online_at: new Date().toISOString(),
-        });
-      }
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+      pushballConnection.exitRoom();
     });
   }
 
-  // 공 위치 브로드캐스트 - 2025-11-14, 김병현 수정 (10fps, 상대좌표 사용)
+  // 방 명단 변경 처리 - 2025-11-14, 김병현 수정
+  // [변경: 2026-11-10 13:18, 김병현 수정] Supabase Presence 의 sync 와 leave 를 서버 방 명단 하나로 대신한다.
+  private handleRoomPlayersChanged({ myId, playerIds }: RoomPlayers) {
+    const previousPlayerIds = this.roomPlayerIds;
+    this.roomPlayerIds = playerIds;
+    this.playerId = myId;
+
+    if (playerIds.length === 2) {
+      // 2명이면 게임 초기화 - 2025-11-14, 김병현 수정
+      if (this.waitingText) {
+        this.waitingText.destroy();
+        this.waitingText = undefined;
+      }
+
+      // 상대 ID 저장
+      const newOpponentId = playerIds.find((id) => id !== this.playerId);
+
+      // 새로운 상대가 들어왔을 때 게임 초기화 - 2025-11-14, 김병현 수정
+      if (newOpponentId !== this.opponentId) {
+        this.opponentId = newOpponentId;
+
+        // 게임이 진행 중이었다면 초기화
+        if (this.gameStarted) {
+          this.resetGame();
+        }
+      }
+
+      // 시작 버튼 표시 - 2025-11-14, 김병현 수정
+      if (!this.startButton && !this.gameStarted) {
+        this.createStartButton();
+      }
+    } else if (playerIds.length === 1) {
+      if (!this.waitingText && !this.gameStarted) {
+        const width = this.cameras.main.width;
+        const height = this.cameras.main.height;
+        this.waitingText = this.add
+          .text(
+            width / 2,
+            height / 3,
+            "혼자 플레이 중 | 상대를 기다리는 중...",
+            {
+              fontSize: "24px",
+              color: "#ffff00",
+            }
+          )
+          .setOrigin(0.5);
+      }
+
+      this.priorityUserId = playerIds[0];
+    }
+
+    // 상대가 나갔을 때 안내 (기존 Presence leave 이벤트 대응)
+    const opponentLeft =
+      this.opponentId !== undefined &&
+      previousPlayerIds.includes(this.opponentId) &&
+      !playerIds.includes(this.opponentId);
+    if (opponentLeft && !this.gameOver) {
+      const width = this.cameras.main.width;
+      const height = this.cameras.main.height;
+      this.add
+        .text(width / 2, height / 2, "상대가 나갔습니다!", {
+          fontSize: "48px",
+          color: "#ff0000",
+        })
+        .setOrigin(0.5);
+    }
+  }
+
+  // 공 위치 동기화 수신 - 2025-11-14, 김병현 수정 (상대좌표 사용, 보간 적용)
+  // [변경: 2026-11-10 13:18, 김병현 수정] 서버가 내 메시지를 돌려보내지 않으므로 보낸 사람 확인을 뺐다.
+  private applyOpponentBallPosition(payload: GameMessages["ball-position"]) {
+    if (!this.ball) return;
+
+    // 화면 크기 가져오기
+    const width = this.cameras.main.width;
+    const height = this.cameras.main.height;
+
+    // 상대 좌표(0~1)를 절대 좌표로 변환
+    const absoluteX = payload.relativeX * width;
+    const absoluteY = payload.relativeY * height;
+
+    // 상대방의 공 위치 업데이트 (화면을 180도 회전하여 표시)
+    // 상대는 위쪽에 있으므로 좌표를 반전
+    const flippedY = height - absoluteY;
+    const flippedX = width - absoluteX;
+
+    // 현재 위치와 목표 위치의 차이 계산
+    const distanceX = flippedX - this.ball.x;
+    const distanceY = flippedY - this.ball.y;
+    const distance = Math.sqrt(distanceX * distanceX + distanceY * distanceY);
+
+    // 거리가 너무 크면 순간이동 (제어권 전환 시), 작으면 부드럽게 보간
+    if (distance > 100) {
+      // 제어권 전환 시: 즉시 이동
+      this.ball.setPosition(flippedX, flippedY);
+      this.ball.setVelocity(-payload.vx, -payload.vy);
+    } else {
+      // 일반적인 경우: 부드럽게 보간
+      const lerpFactor = 0.3; // 보간 강도 (0~1, 높을수록 빠르게 따라감)
+      const targetX = this.ball.x + distanceX * lerpFactor;
+      const targetY = this.ball.y + distanceY * lerpFactor;
+
+      this.ball.setPosition(targetX, targetY);
+      this.ball.setVelocity(-payload.vx, -payload.vy);
+    }
+  }
+
+  // 패들 위치 동기화 수신 - 2025-11-14, 김병현 수정 (상대좌표 사용)
+  // [변경: 2026-11-10 13:18, 김병현 수정] 서버가 내 메시지를 돌려보내지 않으므로 보낸 사람 확인을 뺐다.
+  private applyOpponentPaddlePosition(
+    payload: GameMessages["paddle-position"]
+  ) {
+    if (!this.opponentPaddle) return;
+
+    // 화면 크기 가져오기
+    const width = this.cameras.main.width;
+    const height = this.cameras.main.height;
+
+    // 상대 좌표(0~1)를 절대 좌표로 변환
+    const absoluteX = payload.relativeX * width;
+    const absoluteY = payload.relativeY * height;
+
+    // 상대방의 패들 위치 업데이트 (화면을 180도 회전하여 표시)
+    const flippedY = height - absoluteY;
+    const flippedX = width - absoluteX;
+
+    this.opponentPaddle.setPosition(flippedX, flippedY);
+    this.opponentPaddle.setVisible(true); // 상대가 연결되면 보이게
+  }
+
+  // 득점 이벤트 수신 - 2025-11-14, 김병현 수정
+  private applyOpponentGoal(payload: GameMessages["goal-scored"]) {
+    // 상대방 화면에서는 scorer가 반대로 표시됨
+    if (payload.scorer === "me") {
+      this.opponentScore++;
+      this.opponentScoreText.setText(`상대 점수: ${this.opponentScore}`);
+    } else {
+      this.myScore++;
+      this.myScoreText.setText(`내 점수: ${this.myScore}`);
+    }
+
+    // 득점 효과
+    this.cameras.main.flash(300, 255, 255, 255);
+
+    // 승리 조건 확인
+    if (this.myScore >= 3) {
+      this.handleGameOver(true);
+    } else if (this.opponentScore >= 3) {
+      this.handleGameOver(false);
+    }
+  }
+
+  // 공 위치 브로드캐스트 - 2025-11-14, 김병현 수정 (상대좌표 사용)
+  // [변경: 2026-11-10 13:18, 김병현 수정] 매 프레임 불러도 연결 모듈이 30Hz 로 줄여 최신 값만 보낸다.
   private broadcastBallPosition() {
     // 화면 크기 가져오기
     const width = this.cameras.main.width;
@@ -824,20 +808,16 @@ export class PvPGameScene extends Phaser.Scene {
     const relativeX = this.ball.x / width;
     const relativeY = this.ball.y / height;
 
-    this.channel.send({
-      type: "broadcast",
-      event: "ball-position",
-      payload: {
-        playerId: this.playerId,
-        relativeX: relativeX,
-        relativeY: relativeY,
-        vx: this.ball.body!.velocity.x,
-        vy: this.ball.body!.velocity.y,
-      },
+    pushballConnection.syncState("ball-position", {
+      relativeX: relativeX,
+      relativeY: relativeY,
+      vx: this.ball.body!.velocity.x,
+      vy: this.ball.body!.velocity.y,
     });
   }
 
   // 패들 위치 브로드캐스트 - 2025-11-14, 김병현 수정 (상대좌표 사용)
+  // [변경: 2026-11-10 13:18, 김병현 수정] 마우스가 움직일 때마다 불러도 연결 모듈이 30Hz 로 줄여 최신 값만 보낸다.
   private broadcastPaddlePosition() {
     // 화면 크기 가져오기
     const width = this.cameras.main.width;
@@ -847,14 +827,9 @@ export class PvPGameScene extends Phaser.Scene {
     const relativeX = this.paddle.x / width;
     const relativeY = this.paddle.y / height;
 
-    this.channel.send({
-      type: "broadcast",
-      event: "paddle-position",
-      payload: {
-        playerId: this.playerId,
-        relativeX: relativeX,
-        relativeY: relativeY,
-      },
+    pushballConnection.syncState("paddle-position", {
+      relativeX: relativeX,
+      relativeY: relativeY,
     });
   }
 
@@ -914,10 +889,6 @@ export class PvPGameScene extends Phaser.Scene {
       }
     }
   }
-
-  shutdown() {
-    if (this.channel) {
-      this.channel.unsubscribe();
-    }
-  }
+  // [변경: 2026-11-10 13:18, 김병현 수정] shutdown() 메서드를 지웠다. Phaser 가 부르지 않아서 채널이 정리되지 않았다.
+  //   정리는 setupRealtimeConnection 의 shutdown 이벤트 핸들러가 한다.
 }
