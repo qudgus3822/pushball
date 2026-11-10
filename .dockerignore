@@ -1,0 +1,25 @@
+# [신설: 2026-11-10 12:21, 김병현 작성] 도커 빌드 컨텍스트 축소 + 비밀정보 유출 방지용 신규 작성.
+.git
+.gitignore
+.github
+.claude
+CLAUDE.md
+SUPABASE_GUIDE.md
+
+# 의존성 / 빌드 산출물 (이미지 안에서 새로 설치·빌드)
+node_modules
+dist
+build
+
+# 환경변수 파일은 이미지에 넣지 않는다 (값은 빌드 인자로 받음)
+.env
+.env.*
+
+# 도커 자체 / 로그 / 에디터
+Dockerfile
+.dockerignore
+*.log
+.vite
+.vscode
+.idea
+.DS_Store
