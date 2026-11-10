@@ -1,16 +1,32 @@
 import Phaser from "phaser";
-import { supabase } from "./supabase";
-import type { RealtimeChannel } from "@supabase/supabase-js";
+// [변경: 2026-11-10 13:18, 김병현 수정] Supabase Realtime 대신 실시간 서버 연결 모듈(pushballConnection)을 쓴다.
+import { pushballConnection } from "./network/pushballConnection";
+import type { LobbyRoomCounts, LobbySnapshot, PushballRoomId } from "./types/realtime";
+
+/** 로비에 보여 줄 방. 서버에 고정된 방 id 와 같다. */
+const ROOM_IDS: readonly PushballRoomId[] = ["room-1", "room-2", "room-3"];
 
 // 방 목록 Scene - 2025-11-14, 김병현 수정
 export class RoomListScene extends Phaser.Scene {
-  private availableRooms: Map<string, { playerCount: number }> = new Map();
+  // [변경: 2026-11-10 13:18, 김병현 수정] 방 인원은 서버가 보내 준 값을 그대로 쓴다(Presence 집계 제거).
+  private roomCounts?: LobbyRoomCounts | undefined;
   private roomButtons: Phaser.GameObjects.Text[] = [];
-  private lobbyChannel!: RealtimeChannel;
   private statusText!: Phaser.GameObjects.Text;
+  private lobbyConnected: boolean = false; // 연결 완료 문구를 연결될 때 한 번만 띄우기 위함
+  private isEntering: boolean = false; // 입장 요청 중 중복 클릭 방지
 
   constructor() {
     super("RoomListScene");
+  }
+
+  // [변경: 2026-11-10 13:45, 김병현 수정] 로비에 들어올 때마다 상태를 처음 값으로 되돌린다.
+  //   Phaser 는 Scene 을 다시 시작할 때 같은 인스턴스를 쓴다. 초기화하지 않으면 게임을 마치고 돌아왔을 때
+  //   roomButtons 에 이전 판의 파괴된 텍스트가 남아, 로비를 갱신할 때 그 텍스트까지 다시 그리려 한다.
+  init() {
+    this.roomButtons = [];
+    this.roomCounts = undefined;
+    this.lobbyConnected = false;
+    this.isEntering = false;
   }
 
   create() {
@@ -45,55 +61,44 @@ export class RoomListScene extends Phaser.Scene {
     const roomListBg = this.add.rectangle(400, 350, 600, 300, 0x16213e);
     roomListBg.setStrokeStyle(2, 0x0f3460);
 
-    // 로비 채널 연결 (모든 플레이어가 같은 로비에 접속)
-    this.connectToLobby();
-
     // 3개의 방 버튼 생성
     this.createRoomButtons();
+
+    // [변경: 2026-11-10 13:18, 김병현 수정] 로비 구독은 버튼을 만든 뒤에 한다(구독하자마자 현재 상태로 버튼을 갱신하기 때문).
+    this.connectToLobby();
   }
 
-  // 로비 채널 연결 - 2025-11-14, 김병현 수정
+  // 로비 구독 - 2025-11-14, 김병현 수정
+  // [변경: 2026-11-10 13:18, 김병현 수정] Supabase 로비 채널 대신 서버의 로비 구독을 쓴다.
   private connectToLobby() {
-    this.lobbyChannel = supabase.channel("game-lobby", {
-      config: {
-        presence: { key: "player_" + Date.now() },
-      },
-    });
-
-    // Presence로 각 방의 인원 추적
-    this.lobbyChannel
-      .on("presence", { event: "sync" }, () => {
-        this.updateRoomList();
-      })
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") {
-          this.statusText.setText("연결 완료! 방을 선택하세요");
-        }
-      });
+    const stopWatchingLobby = pushballConnection.watchLobby((lobby) =>
+      this.updateRoomList(lobby)
+    );
+    // Phaser 는 씬의 shutdown() 메서드를 부르지 않는다. shutdown 이벤트에서 구독을 끝낸다.
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, stopWatchingLobby);
   }
 
   // 방 목록 업데이트 - 2025-11-14, 김병현 수정
-  private updateRoomList() {
-    const state = this.lobbyChannel.presenceState();
+  // [변경: 2026-11-10 13:18, 김병현 수정] Presence 집계 대신 서버가 보낸 방별 인원으로 버튼을 갱신한다.
+  private updateRoomList(lobby: LobbySnapshot) {
+    if (!lobby.connected) {
+      this.lobbyConnected = false;
+      this.statusText.setText("서버에 연결하는 중...");
+      this.statusText.setColor("#ffff00");
+      return;
+    }
 
-    // 각 방의 인원수 계산
-    this.availableRooms.clear();
-    Object.values(state).forEach((presences: any) => {
-      presences.forEach((presence: any) => {
-        const roomId = presence.roomId;
-        if (roomId) {
-          const current = this.availableRooms.get(roomId) || { playerCount: 0 };
-          current.playerCount++;
-          this.availableRooms.set(roomId, current);
-        }
-      });
-    });
+    if (!this.lobbyConnected) {
+      this.lobbyConnected = true;
+      this.statusText.setText("연결 완료! 방을 선택하세요");
+      this.statusText.setColor("#00ff00");
+    }
+    this.roomCounts = lobby.rooms;
 
     // 버튼 업데이트
     this.roomButtons.forEach((button, index) => {
-      const roomId = `room-${index + 1}`;
-      const roomData = this.availableRooms.get(roomId);
-      const playerCount = roomData?.playerCount || 0;
+      const roomId = ROOM_IDS[index];
+      const playerCount = roomId ? lobby.rooms[roomId] : 0;
 
       if (playerCount === 0) {
         button.setText(`방 ${index + 1} - 비어있음`);
@@ -113,8 +118,8 @@ export class RoomListScene extends Phaser.Scene {
     const startY = 250;
     const spacing = 80;
 
-    for (let i = 0; i < 3; i++) {
-      const roomId = `room-${i + 1}`;
+    // [변경: 2026-11-10 13:18, 김병현 수정] 방 id 를 서버의 고정 목록(ROOM_IDS)에서 가져온다.
+    for (const [i, roomId] of ROOM_IDS.entries()) {
       const y = startY + i * spacing;
 
       // 방 배경
@@ -149,32 +154,34 @@ export class RoomListScene extends Phaser.Scene {
   }
 
   // 방 입장 - 2025-11-14, 김병현 수정
-  private async joinRoom(roomId: string) {
-    const roomData = this.availableRooms.get(roomId);
-    const playerCount = roomData?.playerCount || 0;
+  // [변경: 2026-11-10 13:18, 김병현 수정] 서버에 입장을 요청하고, 서버가 받아 준 뒤에 게임 Scene 으로 넘어간다.
+  //   정원은 서버가 최종 판정한다(두 사람이 동시에 마지막 자리를 눌러도 한 명만 들어감).
+  private async joinRoom(roomId: PushballRoomId) {
+    if (this.isEntering) return;
 
+    const playerCount = this.roomCounts?.[roomId] ?? 0;
     if (playerCount >= 2) {
       this.statusText.setText("방이 가득 찼습니다!");
       this.statusText.setColor("#ff0000");
       return;
     }
 
-    // 로비에서 방 정보 업데이트
-    await this.lobbyChannel.track({
-      roomId: roomId,
-      online_at: new Date().toISOString(),
-    });
-
+    this.isEntering = true;
     this.statusText.setText(`${roomId} 입장 중...`);
     this.statusText.setColor("#00ff00");
 
-    // 게임 Scene으로 전환
-    this.scene.start("PvPGameScene", { roomId });
-  }
+    const outcome = await pushballConnection.enterRoom(roomId);
+    this.isEntering = false;
 
-  shutdown() {
-    if (this.lobbyChannel) {
-      this.lobbyChannel.unsubscribe();
+    if (outcome === "entered") {
+      // 게임 Scene으로 전환
+      this.scene.start("PvPGameScene");
+    } else if (outcome === "room-full") {
+      this.statusText.setText("방이 가득 찼습니다!");
+      this.statusText.setColor("#ff0000");
+    } else {
+      this.statusText.setText("서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요");
+      this.statusText.setColor("#ff0000");
     }
   }
 }
