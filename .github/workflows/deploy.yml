@@ -1,7 +1,7 @@
 # [신설: 2026-11-10 12:21, 김병현 작성] 홈서버 k3s 배포용 워크플로.
 #   이미지 빌드 -> GHCR 푸시(태그 sha-<7자리>) -> k8s-config repo 의 이미지 태그 갱신(ArgoCD 가 끌어가서 배포).
 #   필요한 시크릿: K8S_CONFIG_DEPLOY_KEY (k8s-config repo 에 "쓰기 허용"으로 등록한 deploy key 의 개인키)
-#   필요한 repo 변수(Variables): VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY (브라우저에 공개되는 값이라 Secret 아님)
+# [변경: 2026-11-10 13:18, 김병현 수정] Supabase 를 걷어내면서 repo 변수(VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY)와 build-args 를 지웠다.
 name: Deploy
 
 on:
@@ -50,10 +50,6 @@ jobs:
           context: .
           push: true
           tags: ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
-          # Vite 가 빌드 때 코드에 박아넣는 값. 비어 있으면 Dockerfile 에서 빌드가 실패한다.
-          build-args: |
-            VITE_SUPABASE_URL=${{ vars.VITE_SUPABASE_URL }}
-            VITE_SUPABASE_ANON_KEY=${{ vars.VITE_SUPABASE_ANON_KEY }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

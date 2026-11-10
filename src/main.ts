@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { MultiplayerScene } from "./multiplayerExample";
+// [변경: 2026-11-10 13:18, 김병현 수정] 쓰지 않던 Supabase 예제 Scene(multiplayerExample) import 를 지웠다.
 import { RoomListScene } from "./RoomListScene";
 import { PvPGameScene } from "./PvPGameScene";
 
